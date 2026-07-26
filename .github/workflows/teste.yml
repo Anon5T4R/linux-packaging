@@ -1,0 +1,112 @@
+name: Teste do fix-appimage
+
+# Roda a action contra AppImages REAIS ja publicados da suite — um Tauri e um
+# Electron. Os dois empacotadores produzem AppDirs diferentes, e a diferenca
+# entre eles ja quebrou esta action uma vez (ver o passo do ANGLE la embaixo).
+#
+# Isto existe porque o bug original era invisivel no CI: o runner e Ubuntu, e o
+# problema so aparece em distro com Mesa mais novo. Nao da pra testar aqui se a
+# janela abre — mas da pra testar tudo que leva ate ela.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  testar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: TaylorHub
+            stack: tauri
+          - repo: OpenObsidian
+            stack: electron
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Baixar AppImage real de ${{ matrix.repo }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p fixture
+          gh release download --repo "Anon5T4R/${{ matrix.repo }}" \
+            --pattern '*.AppImage' --dir fixture
+          ls -lh fixture/
+
+      - name: Rodar a action
+        uses: ./fix-appimage
+        with:
+          path: fixture
+
+      - name: Conferir o resultado
+        run: |
+          set -euo pipefail
+          img="$(ls fixture/*.AppImage | head -1)"
+          echo "conferindo $img"
+
+          # 1) O runtime novo nao pode pedir libfuse.so.2 — era o motivo do app
+          #    nao abrir em Arch/Fedora.
+          if head -c 200000 "$img" | grep -qa 'libfuse\.so\.2'; then
+            echo "::error::ainda referencia libfuse.so.2"; exit 1
+          fi
+          echo "ok: nao depende de libfuse.so.2"
+
+          # 2) Tem que continuar sendo um AppImage que abre e extrai.
+          chmod +x "$img"
+          ( cd fixture && "./$(basename "$img")" --appimage-extract >/dev/null )
+          appdir=fixture/squashfs-root
+          [ -d "$appdir" ] || { echo "::error::nao extraiu"; exit 1; }
+          echo "ok: extrai normalmente"
+
+          # 3) O binario principal e o AppRun tem que ter sobrevivido.
+          [ -e "$appdir/AppRun" ] || { echo "::error::AppRun sumiu"; exit 1; }
+          ls "$appdir"/*.desktop >/dev/null || { echo "::error::.desktop sumiu"; exit 1; }
+          echo "ok: AppRun e .desktop presentes"
+
+          # 4) Nenhuma lib de host versionada pode ter ficado.
+          sobrou="$(find "$appdir" -type f \
+            \( -name 'libwayland-*.so.*' -o -name 'libEGL.so.*' \
+               -o -name 'libGL.so.*' -o -name 'libgbm.so.*' \
+               -o -name 'libvulkan.so.*' \) | head -5)"
+          if [ -n "$sobrou" ]; then
+            echo "::error::lib de host ficou no AppDir:"; echo "$sobrou"; exit 1
+          fi
+          echo "ok: nenhuma lib de host versionada no AppDir"
+
+      # ---------------------------------------------------------------------
+      # REGRESSAO ESPECIFICA DO ELECTRON.
+      #
+      # O Electron embarca o ANGLE do Chromium como `libEGL.so` e
+      # `libGLESv2.so`, SEM sufixo de versao. Nao sao copias do Mesa. Um glob
+      # `libEGL.so*` apaga as duas e derruba o processo de GPU:
+      #   Failed to load GLES library: libGLESv2.so: cannot open shared object
+      #   Exiting GPU process due to errors during initialization
+      #
+      # Aconteceu de verdade com o OpenObsidian. Este passo existe pra que a
+      # proxima pessoa que ampliar a lista de remocao descubra pelo CI, e nao
+      # por um usuario abrindo issue.
+      # ---------------------------------------------------------------------
+      - name: ANGLE do Electron tem que sobreviver
+        if: matrix.stack == 'electron'
+        run: |
+          set -euo pipefail
+          appdir=fixture/squashfs-root
+          falta=0
+          for lib in libEGL.so libGLESv2.so; do
+            if find "$appdir" -type f -name "$lib" | grep -q .; then
+              echo "ok: $lib preservada"
+            else
+              echo "::error::$lib foi removida — o processo de GPU do Electron nao sobe sem ela"
+              falta=1
+            fi
+          done
+          exit $falta
