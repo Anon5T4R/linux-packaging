@@ -1,0 +1,81 @@
+name: Arch package
+description: >-
+  Reempacota o .deb do build em .pkg.tar.zst (pacote nativo do pacman), rodando
+  makepkg num container Arch. O binario passa a usar o webkit2gtk/GTK DO SISTEMA
+  em vez de carregar os do runner — que e a classe de bug que o AppImage tem.
+
+inputs:
+  deb:
+    description: Pasta com o .deb, ou o caminho do arquivo.
+    required: false
+    default: src-tauri/target/release/bundle/deb
+  out:
+    description: Pasta de saida do .pkg.tar.zst.
+    required: false
+    default: dist-arch
+  license:
+    description: >-
+      Licenca no formato do Arch (MIT, GPL3, AGPL3, custom...). Use `custom`
+      quando o repo nao tiver LICENSE — nao invente uma.
+    required: true
+  description:
+    description: pkgdesc do pacote (uma linha).
+    required: true
+  url:
+    description: url do projeto. Por padrao, o proprio repo.
+    required: false
+    default: ''
+
+outputs:
+  package:
+    description: Caminho do .pkg.tar.zst gerado.
+    value: ${{ steps.repack.outputs.package }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reempacotar .deb em .pkg.tar.zst
+      id: repack
+      shell: bash
+      env:
+        IN_DEB: ${{ inputs.deb }}
+        OUT_DIR: ${{ inputs.out }}
+        LICENSE: ${{ inputs.license }}
+        PKGDESC: ${{ inputs.description }}
+        URL_IN: ${{ inputs.url }}
+      run: |
+        set -euo pipefail
+
+        # Repack em vez de build nativo: o Tauri nao tem alvo pacman, e compilar
+        # tudo de novo dentro de um container Arch custaria uma 2a toolchain
+        # completa vezes 30+ apps. O repack e o que a maioria dos pacotes -bin do
+        # AUR faz. O detalhe do porque esta no cabecalho do deb-to-arch.sh.
+
+        url="${URL_IN:-https://github.com/$GITHUB_REPOSITORY}"
+
+        if [ -d "$IN_DEB" ]; then
+          deb="$(find "$IN_DEB" -maxdepth 1 -type f -name '*.deb' | sort | head -1)"
+        else
+          deb="$IN_DEB"
+        fi
+        if [ -z "${deb:-}" ] || [ ! -f "$deb" ]; then
+          echo "::error::nenhum .deb em '$IN_DEB' — o build precisa incluir o bundle 'deb'"
+          exit 1
+        fi
+        echo "deb de entrada: $deb"
+
+        mkdir -p "$OUT_DIR"
+
+        # O script vive na action (fora do workspace), entao entra por um mount
+        # proprio, so-leitura. O workspace entra em /w porque e onde estao o .deb
+        # e a pasta de saida.
+        docker run --rm \
+          -v "$GITHUB_WORKSPACE:/w" -w /w \
+          -v "$GITHUB_ACTION_PATH:/action:ro" \
+          archlinux:base-devel \
+          /action/deb-to-arch.sh "$deb" "$url" "$LICENSE" "$PKGDESC" "$OUT_DIR"
+
+        pkg="$(find "$OUT_DIR" -maxdepth 1 -type f -name '*.pkg.tar.zst' | sort | head -1)"
+        [ -n "$pkg" ] || { echo "::error::o repack terminou sem .pkg.tar.zst"; exit 1; }
+        echo "package=$pkg" >> "$GITHUB_OUTPUT"
+        echo "gerado: $pkg"

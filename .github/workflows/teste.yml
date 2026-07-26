@@ -110,3 +110,63 @@ jobs:
             fi
           done
           exit $falta
+
+  # ---------------------------------------------------------------------------
+  # arch-package: repack de .deb em .pkg.tar.zst.
+  #
+  # O teste que importa aqui NAO e "gerou o arquivo" — e "o pacman aceita
+  # instalar". Um pkgname mal formado, um `depends` com nome que nao existe no
+  # Arch ou um conflito de arquivo so aparecem na hora do `pacman -U`, e ai
+  # apareceriam na maquina do usuario. A traducao de dependencias Debian->Arch e
+  # uma TABELA escrita a mao (ver deb-to-arch.sh): tabela sem teste apodrece.
+  # ---------------------------------------------------------------------------
+  testar-arch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Baixar .deb real do TaylorHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p fixture-deb
+          gh release download --repo Anon5T4R/TaylorHub \
+            --pattern '*.deb' --dir fixture-deb
+          ls -lh fixture-deb/
+
+      - name: Rodar a action
+        id: arch
+        uses: ./arch-package
+        with:
+          deb: fixture-deb
+          out: saida-arch
+          license: MIT
+          description: TaylorHub - teste de empacotamento
+
+      - name: O pacman tem que ACEITAR instalar
+        run: |
+          set -euo pipefail
+          pkg="${{ steps.arch.outputs.package }}"
+          [ -n "$pkg" ] && [ -f "$pkg" ] || { echo "::error::action nao devolveu o pacote"; exit 1; }
+          echo "instalando $pkg num Arch limpo"
+
+          # `-Syu` antes: o Arch e rolling e instalar sobre um indice velho da o
+          # classico "package not found", que leria como erro do nosso pacote.
+          docker run --rm -v "$PWD:/w" -w /w archlinux:base-devel bash -euo pipefail -c '
+            pacman -Syu --noconfirm >/dev/null
+            pacman -U --noconfirm "'"$pkg"'"
+            echo "--- instalado ---"
+            pacman -Qi "$(pacman -Qq | grep -i taylor | head -1)" | head -12
+            echo "--- arquivos ---"
+            pacman -Ql "$(pacman -Qq | grep -i taylor | head -1)" | head -8
+            test -x /usr/bin/TaylorHub || test -x /usr/bin/taylor-hub || {
+              echo "::error::pacote instalou mas nao ha binario executavel esperado em /usr/bin"
+              pacman -Ql "$(pacman -Qq | grep -i taylor | head -1)" | grep usr/bin || true
+              exit 1
+            }
+            echo "ok: binario presente e executavel"
+          '
