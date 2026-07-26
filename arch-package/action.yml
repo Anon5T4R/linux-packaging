@@ -51,6 +51,7 @@ runs:
         LICENSE: ${{ inputs.license }}
         PKGDESC: ${{ inputs.description }}
         URL_IN: ${{ inputs.url }}
+        SYSTEM_BINS: ${{ inputs.system-bins }}
       run: |
         set -euo pipefail
 
@@ -81,7 +82,7 @@ runs:
           -v "$GITHUB_WORKSPACE:/w" -w /w \
           -v "$GITHUB_ACTION_PATH:/action:ro" \
           archlinux:base-devel \
-          /action/deb-to-arch.sh "$deb" "$url" "$LICENSE" "$PKGDESC" "$OUT_DIR"
+          /action/deb-to-arch.sh "$deb" "$url" "$LICENSE" "$PKGDESC" "$OUT_DIR" "${SYSTEM_BINS:-}"
 
         pkg="$(find "$OUT_DIR" -maxdepth 1 -type f -name '*.pkg.tar.zst' | sort | head -1)"
         [ -n "$pkg" ] || { echo "::error::o repack terminou sem .pkg.tar.zst"; exit 1; }
