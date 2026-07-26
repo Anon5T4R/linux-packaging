@@ -1,0 +1,29 @@
+name: Fix Linux AppImage
+description: >-
+  Reempacota um AppImage para rodar fora da distro do runner: remove as libs que
+  precisam vir do host (Wayland/GPU) e troca o runtime antigo pelo type2-runtime,
+  que fala fuse3 e dispensa o pacote fuse2 no usuario final.
+
+inputs:
+  path:
+    description: >-
+      Pasta com .AppImage(s) ou caminho de um .AppImage.
+      Tauri:            src-tauri/target/release/bundle/appimage
+      electron-builder: dist
+    required: true
+  extra-strip:
+    description: >-
+      Globs adicionais a remover do AppDir, separados por espaco.
+      Só use ao descobrir uma lib nova brigando com o host.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Reempacotar AppImage(s)
+      shell: bash
+      run: |
+        chmod +x "$GITHUB_ACTION_PATH/fix-appimage.sh"
+        "$GITHUB_ACTION_PATH/fix-appimage.sh" \
+          "${{ inputs.path }}" ${{ inputs.extra-strip }}
