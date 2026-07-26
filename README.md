@@ -89,6 +89,23 @@ famílias sem precisar saber qual empacotador gerou o AppDir.
 Isso foi descoberto quebrando o OpenObsidian de verdade. Se você for ampliar a
 lista, **teste em um app Electron e em um Tauri** antes.
 
+## Mexeu aqui? Mova a tag `v1`
+
+Os repos consomem `@v1`, e **tag não anda sozinha**. Um commit em `main` sem
+mover a `v1` não chega em ninguém — e o modo de falha é ruim: o passo morre em
+*"Set up job"* com "action not found", que não parece erro de versão de tag.
+
+Já aconteceu: a `v1` foi criada quando só existia o `fix-appimage/`, e o
+`arch-package/` ficou invisível pros 33 repos até a tag ser movida.
+
+```bash
+git tag -f v1 main && git push --force origin v1
+git tag -a v1.N.0 main -m "descricao" && git push origin v1.N.0
+```
+
+A `v1` é tag móvel de major (mesma convenção do `actions/checkout@v4`); a
+`v1.N.0` fica imutável, pra dar como rastrear o que rodou em cada release.
+
 ## Fora de escopo, de propósito
 
 Isto conserta o AppImage; não substitui pacote nativo. Onde existe `.deb` ou
