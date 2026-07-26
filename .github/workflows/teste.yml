@@ -172,5 +172,22 @@ jobs:
             [ "${#bins[@]}" -ge 1 ] || { echo "::error::nenhum executavel em /usr/bin"; exit 1; }
             pacman -Ql "$nome" | grep -q "/usr/share/applications/.*\.desktop" \
               || { echo "::error::pacote sem entrada .desktop"; exit 1; }
-            echo "ok: instala, tem executavel e tem .desktop"
+
+            # REGRESSAO: o binario do TaylorHub se chama `hub` no Cargo, e
+            # `extra/hub` existe no Arch. Se voltar a instalar /usr/bin/hub, o
+            # pacote quebra em toda maquina que tenha aquele pacote — e o erro
+            # ("exists in filesystem") nao diz de quem e a culpa.
+            if pacman -Ql "$nome" | grep -qE " /usr/bin/hub$"; then
+              echo "::error::pacote voltou a instalar /usr/bin/hub — colide com extra/hub"
+              exit 1
+            fi
+            test -x /usr/bin/taylor-hub \
+              || { echo "::error::esperava /usr/bin/taylor-hub apos o rename"; exit 1; }
+
+            # O .desktop tem que apontar pro nome novo, senao o pacote instala
+            # mas o icone do menu nao abre nada.
+            d="$(pacman -Ql "$nome" | awk "{print \$2}" | grep "\.desktop$" | head -1)"
+            grep -E "^Exec=taylor-hub" "$d" \
+              || { echo "::error::Exec do .desktop nao acompanhou o rename"; grep ^Exec= "$d"; exit 1; }
+            echo "ok: instala, renomeado, .desktop consistente"
           '

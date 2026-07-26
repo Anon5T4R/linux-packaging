@@ -153,11 +153,52 @@ mkdir -p pkgbuild && cp "$DEB" pkgbuild/payload.deb && cd pkgbuild
   # é retrabalho e risco à toa. `!debug`: sem isto o makepkg tenta cuspir um
   # pacote `-debug` separado e falha por não achar símbolos.
   echo "options=(!strip !debug emptydirs)"
-  echo 'package() {'
-  echo '  cd "$srcdir"'
-  echo '  bsdtar -xf payload.deb'
-  echo '  bsdtar -xf data.tar.* -C "$pkgdir"'
-  echo '}'
+  cat <<'PKGFN'
+package() {
+  cd "$srcdir"
+  bsdtar -xf payload.deb
+  bsdtar -xf data.tar.* -C "$pkgdir"
+
+  # ── Renomear o binario principal pro nome do pacote ───────────────────────
+  #
+  # O nome do binario vem do `[package].name` do Cargo, que NAO acompanha o
+  # nome do app: o TaylorHub instala `/usr/bin/hub` e o LocalCode instala
+  # `/usr/bin/code`. Em /usr/bin isso e nome de programa de verdade —
+  # `extra/hub` e `extra/code` (o VS Code) existem no Arch, e numa maquina que
+  # os tenha o `pacman -U` recusa com "exists in filesystem". O usuario le isso
+  # como "o pacote de voces esta quebrado", e nao tem como saber de quem e a
+  # culpa.
+  #
+  # Renomear AQUI, e nao no Cargo.toml, e de proposito: nao muda o nome do .exe
+  # no Windows, nao mexe no catalogo do Hub, e o Hub continua achando o binario
+  # porque ele o descobre por `pacman -Ql` (primeiro arquivo em /usr/bin), sem
+  # nome hardcoded.
+  #
+  # Quem manda e o `Exec=` do .desktop: e o unico lugar que diz qual dos
+  # binarios e o app. Sidecar (ex.: o pandoc do LocalOffice) fica intocado.
+  local desktop linha resto primeiro args exec_bin
+  desktop="$(find "$pkgdir/usr/share/applications" -maxdepth 1 -name '*.desktop' 2>/dev/null | head -1)"
+  if [ -n "$desktop" ]; then
+    # `Exec=` pode vir como "hub", "hub %U" ou "/usr/bin/hub %U". Separar o
+    # primeiro token dos argumentos preserva o `%U` (sem ele, abrir arquivo
+    # pelo gerenciador de arquivos para de funcionar).
+    linha="$(grep -m1 '^Exec=' "$desktop" || true)"
+    resto="${linha#Exec=}"
+    primeiro="${resto%% *}"
+    args="${resto#"$primeiro"}"
+    exec_bin="$(basename "$primeiro")"
+
+    if [ -n "$exec_bin" ] && [ "$exec_bin" != "$pkgname" ] \
+       && [ -f "$pkgdir/usr/bin/$exec_bin" ]; then
+      mv "$pkgdir/usr/bin/$exec_bin" "$pkgdir/usr/bin/$pkgname"
+      sed -i "s|^Exec=.*|Exec=$pkgname$args|" "$desktop"
+      sed -i "s|^TryExec=.*|TryExec=$pkgname|" "$desktop"
+      echo "binario renomeado: /usr/bin/$exec_bin -> /usr/bin/$pkgname"
+      grep -E '^(Exec|TryExec)=' "$desktop"
+    fi
+  fi
+}
+PKGFN
 } > PKGBUILD
 
 echo "--- PKGBUILD ---"; cat PKGBUILD; echo "----------------"
