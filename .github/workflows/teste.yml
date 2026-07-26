@@ -205,6 +205,16 @@ jobs:
                 test -x /usr/bin/taylor-hub || { echo "::error::esperava /usr/bin/taylor-hub"; exit 1; }
                 d="$(pacman -Ql "$nome" | awk "{print \$2}" | grep "\.desktop$" | head -1)"
                 grep -qE "^Exec=taylor-hub" "$d" || { echo "::error::Exec nao acompanhou o rename"; grep ^Exec= "$d"; exit 1; }
+
+                # REGRESSAO: o StartupWMClass e o que o GNOME usa pra casar a
+                # JANELA com a entrada .desktop e pegar o icone do dock. O
+                # app_id da janela sai do basename do binario, entao renomear
+                # sem mexer aqui deixa o app abrindo com icone generico no dock
+                # — sem erro nenhum, so feio. Foi o que aconteceu.
+                grep -qE "^StartupWMClass=taylor-hub\$" "$d" || {
+                  echo "::error::StartupWMClass nao acompanhou o rename do binario"
+                  grep -E "^(Exec|StartupWMClass)=" "$d"; exit 1; }
+                echo "ok: StartupWMClass casa com o binario"
                 ;;
               sidecar)
                 # O pandoc embutido tem que ter saido do pacote e virado depends:

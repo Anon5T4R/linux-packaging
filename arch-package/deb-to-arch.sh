@@ -221,8 +221,25 @@ package() {
       mv "$pkgdir/usr/bin/$exec_bin" "$pkgdir/usr/bin/$pkgname"
       sed -i "s|^Exec=.*|Exec=$pkgname$args|" "$desktop"
       sed -i "s|^TryExec=.*|TryExec=$pkgname|" "$desktop"
+
+      # `StartupWMClass` TEM que acompanhar o rename, e isto nao e detalhe.
+      #
+      # E por ele que o GNOME casa a JANELA EM EXECUCAO com a entrada .desktop,
+      # e dai tira o icone do dock. O Tauri escreve ali o nome do binario, e o
+      # app_id que a janela anuncia sai do basename do argv[0] — ou seja, do
+      # mesmo nome. Renomear o binario sem mexer aqui quebra o par: o app abre,
+      # funciona, e aparece no dock com icone generico, sem nenhum erro.
+      #
+      # `Icon=` NAO muda de proposito: o arquivo de icone continua com o nome
+      # antigo dentro do pacote, e e ele que o `Icon=` resolve.
+      if grep -q '^StartupWMClass=' "$desktop"; then
+        sed -i "s|^StartupWMClass=.*|StartupWMClass=$pkgname|" "$desktop"
+      else
+        echo "StartupWMClass=$pkgname" >> "$desktop"
+      fi
+
       echo "binario renomeado: /usr/bin/$exec_bin -> /usr/bin/$pkgname"
-      grep -E '^(Exec|TryExec)=' "$desktop"
+      grep -E '^(Exec|TryExec|StartupWMClass|Icon)=' "$desktop"
     fi
 
     # ── App fora de /usr/bin (Electron): criar o ponto de entrada ───────────
