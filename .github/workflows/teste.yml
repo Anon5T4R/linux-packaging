@@ -159,14 +159,18 @@ jobs:
           docker run --rm -v "$PWD:/w" -w /w archlinux:base-devel bash -euo pipefail -c '
             pacman -Syu --noconfirm >/dev/null
             pacman -U --noconfirm "'"$pkg"'"
-            echo "--- instalado ---"
-            pacman -Qi "$(pacman -Qq | grep -i taylor | head -1)" | head -12
-            echo "--- arquivos ---"
-            pacman -Ql "$(pacman -Qq | grep -i taylor | head -1)" | head -8
-            test -x /usr/bin/TaylorHub || test -x /usr/bin/taylor-hub || {
-              echo "::error::pacote instalou mas nao ha binario executavel esperado em /usr/bin"
-              pacman -Ql "$(pacman -Qq | grep -i taylor | head -1)" | grep usr/bin || true
-              exit 1
-            }
-            echo "ok: binario presente e executavel"
+            nome="$(pacman -Qq | grep -i taylor | head -1)"
+            echo "--- instalado ---"; pacman -Qi "$nome" | head -12
+
+            # Nao assumir o NOME do binario: ele vem do [package].name do Cargo,
+            # que nao acompanha o nome do app (o TaylorHub instala /usr/bin/hub).
+            # O que se exige e que exista ALGUM executavel em /usr/bin e uma
+            # entrada .desktop — que e o contrato real do pacote.
+            mapfile -t bins < <(pacman -Ql "$nome" | awk "{print \$2}" \
+              | grep -E "^/usr/bin/.+" | while read -r f; do [ -x "$f" ] && echo "$f"; done)
+            echo "executaveis em /usr/bin: ${bins[*]:-(nenhum)}"
+            [ "${#bins[@]}" -ge 1 ] || { echo "::error::nenhum executavel em /usr/bin"; exit 1; }
+            pacman -Ql "$nome" | grep -q "/usr/share/applications/.*\.desktop" \
+              || { echo "::error::pacote sem entrada .desktop"; exit 1; }
+            echo "ok: instala, tem executavel e tem .desktop"
           '
