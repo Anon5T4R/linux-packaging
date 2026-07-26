@@ -25,6 +25,14 @@ inputs:
     description: url do projeto. Por padrao, o proprio repo.
     required: false
     default: ''
+  system-bins:
+    description: >-
+      Binarios que o .deb embute em /usr/bin mas que o Arch ja tem como pacote
+      (separados por espaco, ex.: `pandoc`). Sao removidos do pacote e viram
+      `depends`. Use quando o binario embutido colide com um pacote do Arch:
+      o caminho /usr/bin/<bin> nao muda, entao sidecar continua sendo achado.
+    required: false
+    default: ''
 
 outputs:
   package:

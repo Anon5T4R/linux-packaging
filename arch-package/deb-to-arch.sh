@@ -33,7 +33,11 @@
 # obrigaria a uma segunda regra de casamento só pra uma distro.
 #
 # Uso (dentro de um container archlinux, como root):
-#   deb-to-arch.sh <arquivo.deb> <url> <licenca> <descricao> <dir-de-saida>
+#   deb-to-arch.sh <arquivo.deb> <url> <licenca> <descricao> <dir-de-saida> [bins-do-sistema]
+#
+# `bins-do-sistema`: lista separada por espaco de binarios que o .deb embute em
+# /usr/bin mas que o Arch ja tem como pacote (ex.: `pandoc`). Eles sao REMOVIDOS
+# do pacote e viram `depends`. Ver a secao 3b.
 
 set -euo pipefail
 
@@ -42,6 +46,7 @@ URL="${2:?falta a url do projeto}"
 LICENSE="${3:?falta a licença}"
 PKGDESC="${4:?falta a descrição}"
 OUTDIR="${5:?falta o diretório de saída}"
+SYSTEM_BINS="${6:-}"
 
 DEB="$(readlink -f "$DEB")"
 mkdir -p "$OUTDIR"
@@ -117,6 +122,25 @@ done
 if [ "${#descartadas[@]}" -gt 0 ]; then
   echo "::warning::dependências do .deb sem equivalente mapeado no Arch (descartadas): ${descartadas[*]}"
 fi
+# ── 3b. Binarios que o Arch ja tem como pacote ───────────────────────────────
+#
+# Caso real: o LocalOffice embute o `pandoc` como sidecar do Tauri, e ele cai em
+# `/usr/bin/pandoc` — que e exatamente o arquivo do pacote `pandoc` do Arch. Numa
+# maquina que o tenha, o `pacman -U` recusa por conflito de arquivo.
+#
+# Em vez de renomear (o Tauri procura o sidecar pelo nome exato, ao lado do
+# executavel), REMOVEMOS o binario embutido e declaramos o pacote como
+# dependencia. O sidecar continua sendo encontrado porque o caminho nao muda:
+# `/usr/bin/pandoc` passa a ser o do sistema, no mesmo diretorio do executavel.
+sistema=()
+if [ -n "$SYSTEM_BINS" ]; then
+  read -ra sistema <<< "$SYSTEM_BINS"
+  for s in "${sistema[@]}"; do
+    depends+=("$s")
+    echo "binario do sistema: /usr/bin/$s sai do pacote e vira depends=($s)"
+  done
+fi
+
 echo "depends: ${depends[*]:-(nenhuma)}"
 
 # ── 3. Conflito de arquivo: o motivo nº 1 de um `pacman -U` recusar ──────────
@@ -153,6 +177,10 @@ mkdir -p pkgbuild && cp "$DEB" pkgbuild/payload.deb && cd pkgbuild
   # é retrabalho e risco à toa. `!debug`: sem isto o makepkg tenta cuspir um
   # pacote `-debug` separado e falha por não achar símbolos.
   echo "options=(!strip !debug emptydirs)"
+  # Repassado pro package() como variavel, e nao interpolado no corpo da funcao:
+  # o corpo vai num heredoc COM ASPAS, de proposito, pra que `$pkgdir` e `$srcdir`
+  # cheguem literais ao makepkg em vez de expandirem aqui como vazio.
+  printf "_system_bins='%s'\n" "${sistema[*]:-}"
   cat <<'PKGFN'
 package() {
   cd "$srcdir"
@@ -196,7 +224,38 @@ package() {
       echo "binario renomeado: /usr/bin/$exec_bin -> /usr/bin/$pkgname"
       grep -E '^(Exec|TryExec)=' "$desktop"
     fi
+
+    # ── App fora de /usr/bin (Electron): criar o ponto de entrada ───────────
+    #
+    # O .deb do electron-builder instala tudo em /opt/<App>/ e o `.desktop`
+    # aponta pra la; NADA vai pra /usr/bin. Duas consequencias: nao ha comando
+    # pra chamar do terminal, e o Hub — que descobre o executavel pelo primeiro
+    # arquivo em /usr/bin (`pacman -Ql`) — nao acha nada e nao consegue abrir o
+    # app. Um symlink resolve os dois, sem tocar no `Exec=`, que ja funciona.
+    if [ ! -d "$pkgdir/usr/bin" ] || [ -z "$(ls -A "$pkgdir/usr/bin" 2>/dev/null)" ]; then
+      if [ -n "$primeiro" ] && [ -f "$pkgdir$primeiro" ]; then
+        install -d "$pkgdir/usr/bin"
+        ln -s "$primeiro" "$pkgdir/usr/bin/$pkgname"
+        echo "ponto de entrada criado: /usr/bin/$pkgname -> $primeiro"
+      else
+        echo "::warning::nada em /usr/bin e o Exec do .desktop ($primeiro) nao existe no pacote — o Hub nao vai conseguir abrir este app"
+      fi
+    fi
   fi
+
+  # ── Binarios que o Arch ja tem como pacote ────────────────────────────────
+  # Removidos aqui e declarados em `depends` (ver secao 3b). O caminho nao muda
+  # — /usr/bin/<bin> passa a ser o do sistema — entao o sidecar do Tauri, que
+  # procura ao lado do executavel, continua encontrando.
+  local sb
+  for sb in $_system_bins; do
+    if [ -e "$pkgdir/usr/bin/$sb" ]; then
+      rm -f "$pkgdir/usr/bin/$sb"
+      echo "removido do pacote (vem do sistema): /usr/bin/$sb"
+    else
+      echo "::warning::pediram pra tirar /usr/bin/$sb mas ele nao esta no .deb"
+    fi
+  done
 }
 PKGFN
 } > PKGBUILD
