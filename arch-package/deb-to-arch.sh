@@ -108,21 +108,11 @@ declare -A MAP=(
 )
 depends=()
 descartadas=()
-# O binário pode ter sido LINKADO contra a soname do runner Ubuntu
-# (libxdo.so.3, via enigo — preenchimento automático do LocalKeys). O pacote
-# `xdotool` do Arch só empacota a soname NOVA (libxdo.so.4): a depends resolve
-# a biblioteca, mas não a SONAME antiga gravada no ELF, e o app morre no
-# `error while loading shared libraries` ANTES de qualquer código rodar. A ABI
-# dos símbolos que o enigo usa é a mesma nas duas (upstream só bateu a soname),
-# então um symlink de compat resolve sem recompilar — ele entra no pacote na
-# seção 4, package().
-xdo_compat=0
 IFS=',' read -ra raw <<< "${deb_depends:-}"
 for d in "${raw[@]}"; do
   # "libgtk-3-0 (>= 3.24)" → "libgtk-3-0"
   d="$(printf '%s' "$d" | sed 's/(.*)//' | xargs || true)"
   [ -n "$d" ] || continue
-  [ "$d" = libxdo3 ] && xdo_compat=1
   if [ -n "${MAP[$d]:-}" ]; then
     depends+=("${MAP[$d]}")
   else
@@ -131,6 +121,36 @@ for d in "${raw[@]}"; do
 done
 if [ "${#descartadas[@]}" -gt 0 ]; then
   echo "::warning::dependências do .deb sem equivalente mapeado no Arch (descartadas): ${descartadas[*]}"
+fi
+
+# ── 2b. libxdo.so.3: detectar pelo ELF, não pelo control ─────────────────────
+#
+# O binário pode ter sido LINKADO contra a soname do runner Ubuntu
+# (libxdo.so.3, via enigo — preenchimento automático da extensão do LocalKeys).
+# O pacote `xdotool` do Arch só empacota a soname NOVA (libxdo.so.4): mesmo com
+# a depends resolvida, o loader procura a SONAME literal gravada no ELF, e o
+# app morre no `error while loading shared libraries` ANTES de qualquer código
+# rodar. A ABI dos símbolos que o enigo usa é a mesma nas duas (upstream só
+# bumpou a soname), então um symlink de compat resolve sem recompilar — criado
+# na seção 4, package().
+#
+# A detecção NÃO pode vir do Depends do control: o bundler .deb do Tauri só
+# declara as libs que conhece (webkit, gtk, appindicator...). Constatação do
+# LocalKeys v0.9.1: `Depends: libwebkit2gtk-4.1-0, libgtk-3-0` enquanto o
+# readelf do binário pede libxdo.so.3. Então: extrai o data.tar e procura a
+# soname nos ARQUIVOS do pacote — grep binário, sem readelf: a soname mora em
+# .dynstr como bytes plaintext, e um pipeline readelf|grep daria falso negativo
+# aqui (readelf devolve !=0 em não-ELF e o pipefail propagaria — além do grep -q
+# fechar a pipe cedo e matar o readelf com SIGPIPE). `xdotool` entra em depends
+# AQUI porque o control não vai trazer.
+xdo_compat=0
+scan="$work/scan"
+mkdir -p "$scan"
+bsdtar -xf "$data_tar" -C "$scan"
+if grep -rlaq 'libxdo\.so\.3' "$scan" 2>/dev/null; then
+  xdo_compat=1
+  printf '%s\n' "${depends[@]}" | grep -qx xdotool || depends+=(xdotool)
+  echo "ELF do pacote precisa de libxdo.so.3 → depends+=(xdotool) + symlink de compat"
 fi
 # ── 3b. Binarios que o Arch ja tem como pacote ───────────────────────────────
 #
