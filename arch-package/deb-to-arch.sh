@@ -108,11 +108,21 @@ declare -A MAP=(
 )
 depends=()
 descartadas=()
+# O binário pode ter sido LINKADO contra a soname do runner Ubuntu
+# (libxdo.so.3, via enigo — preenchimento automático do LocalKeys). O pacote
+# `xdotool` do Arch só empacota a soname NOVA (libxdo.so.4): a depends resolve
+# a biblioteca, mas não a SONAME antiga gravada no ELF, e o app morre no
+# `error while loading shared libraries` ANTES de qualquer código rodar. A ABI
+# dos símbolos que o enigo usa é a mesma nas duas (upstream só bateu a soname),
+# então um symlink de compat resolve sem recompilar — ele entra no pacote na
+# seção 4, package().
+xdo_compat=0
 IFS=',' read -ra raw <<< "${deb_depends:-}"
 for d in "${raw[@]}"; do
   # "libgtk-3-0 (>= 3.24)" → "libgtk-3-0"
   d="$(printf '%s' "$d" | sed 's/(.*)//' | xargs || true)"
   [ -n "$d" ] || continue
+  [ "$d" = libxdo3 ] && xdo_compat=1
   if [ -n "${MAP[$d]:-}" ]; then
     depends+=("${MAP[$d]}")
   else
@@ -181,6 +191,7 @@ mkdir -p pkgbuild && cp "$DEB" pkgbuild/payload.deb && cd pkgbuild
   # o corpo vai num heredoc COM ASPAS, de proposito, pra que `$pkgdir` e `$srcdir`
   # cheguem literais ao makepkg em vez de expandirem aqui como vazio.
   printf "_system_bins='%s'\n" "${sistema[*]:-}"
+  printf "_xdo_compat='%s'\n" "$xdo_compat"
   cat <<'PKGFN'
 package() {
   cd "$srcdir"
@@ -273,6 +284,33 @@ package() {
       echo "::warning::pediram pra tirar /usr/bin/$sb mas ele nao esta no .deb"
     fi
   done
+
+  # ── Symlink de compat: libxdo.so.3 → libxdo.so.4 ──────────────────────────
+  # Quem linka contra libxdo.so.3 é o enigo (autofill da extensão do
+  # LocalKeys), e o link acontece no runner Ubuntu 22.04. No Arch, o xdotool
+  # só fornece libxdo.so.4 — a depends entrega a biblioteca, mas o loader
+  # procura pela SONAME literal, e ela não existe. Sem isto o app não abre com
+  # `error while loading shared libraries: libxdo.so.3`, sem nem chegar ao
+  # código do app (é por isso que o bug não aparece no Windows: lá o enigo usa
+  # a API Win32 e nem passa pelo xdo).
+  #
+  # Os símbolos que o enigo usa (xdo_new, xdo_free, xdo_enter_text_window,
+  # xdo_send_keysequence_window{,_down,_up}) existem e unchanged na .so.4 — o
+  # upstream só bumpou a soname. O symlink fecha o buraco; recompilar no Arch
+  # é exatamente o que este repack existe pra evitar.
+  #
+  # O symlink VIAJA NO PACOTE, não num scriptlet de install: o pacman o
+  # registra como arquivo do pacote, o remove junto com o app, e não sobra
+  # arquivo órfão em desinstalação. E como `xdotool` está em depends, o alvo
+  # .so.4 não pode sumir enquanto o symlink existir — o pacman se recusa a
+  # remover dependência de pacote instalado. Único cenário de conflito é outra
+  # fonte já dona de /usr/lib/libxdo.so.3, que não existe nos repositórios do
+  # Arch (nada lá empacota a soname 3).
+  if [ "$_xdo_compat" = 1 ]; then
+    install -d "$pkgdir/usr/lib"
+    ln -s libxdo.so.4 "$pkgdir/usr/lib/libxdo.so.3"
+    echo "compat: /usr/lib/libxdo.so.3 -> libxdo.so.4 (xdotool do Arch só traz a soname 4)"
+  fi
 }
 PKGFN
 } > PKGBUILD
