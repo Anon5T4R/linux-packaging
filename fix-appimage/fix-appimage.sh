@@ -97,6 +97,16 @@ for img in "${ALVOS[@]}"; do
   appdir="$work/squashfs-root"
   [ -d "$appdir" ] || { echo "erro: falhou ao extrair $nome" >&2; exit 1; }
 
+  # A arvore extraida chega com os diretorios em 0700 (rwx------) — nao importa
+  # se foi o empacotador original ou o extrator do runtime que os deixou assim.
+  # O appimagetool (continuous desde 2026-11) passou a RECUSAR AppDir assim, e
+  # a recusa e correta: AppImage roda na maquina de OUTREM, e diretorio 0700 do
+  # empacotador vira 'Permission denied' no usuario final. Normalizar e o
+  # conserto, nao o contorno. `a+rX` da leitura pra todos e execucao so em
+  # diretorio e no que ja era executavel — nunca transforma dado em executavel.
+  chmod -R a+rX "$appdir"
+  chmod a+rx "$appdir/AppRun"
+
   removidas=0
   for pat in "${HOST_LIBS[@]}"; do
     while IFS= read -r -d '' f; do
